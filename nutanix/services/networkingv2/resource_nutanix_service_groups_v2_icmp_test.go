@@ -110,4 +110,108 @@ func TestExpandIcmpTypeCodeSpec(t *testing.T) {
 			t.Fatalf("second spec: expected Type=8, got %v", got[1].Type)
 		}
 	})
+
+	t.Run("is_all_allowed=true with nonzero type and code still drops them", func(t *testing.T) {
+		// Defensive: even if the user (incorrectly) supplies type/code
+		// alongside is_all_allowed=true, the wildcard intent wins and the
+		// API payload must NOT carry the conflicting fields.
+		input := []interface{}{
+			map[string]interface{}{
+				"is_all_allowed": true,
+				"type":           8, // would normally be Echo Request
+				"code":           5,
+			},
+		}
+		got := expandIcmpTypeCodeSpec(input)
+		spec := got[0]
+		if spec.IsAllAllowed == nil || !*spec.IsAllAllowed {
+			t.Fatalf("expected IsAllAllowed=true, got %v", spec.IsAllAllowed)
+		}
+		if spec.Type != nil {
+			t.Fatalf("is_all_allowed=true must drop Type even when user supplied %d, got *Type=%d", 8, *spec.Type)
+		}
+		if spec.Code != nil {
+			t.Fatalf("is_all_allowed=true must drop Code even when user supplied %d, got *Code=%d", 5, *spec.Code)
+		}
+	})
+
+	t.Run("is_all_allowed=true with only type supplied still drops it", func(t *testing.T) {
+		// HCL author writes:
+		//   icmp_services { is_all_allowed = true, type = 8 }
+		// The fix must NOT echo `type` back into the payload.
+		input := []interface{}{
+			map[string]interface{}{
+				"is_all_allowed": true,
+				"type":           8,
+				"code":           0,
+			},
+		}
+		spec := expandIcmpTypeCodeSpec(input)[0]
+		if spec.Type != nil {
+			t.Fatalf("expected Type omitted, got *Type=%d", *spec.Type)
+		}
+	})
+
+	t.Run("is_all_allowed=true with only code supplied still drops it", func(t *testing.T) {
+		input := []interface{}{
+			map[string]interface{}{
+				"is_all_allowed": true,
+				"type":           0,
+				"code":           3,
+			},
+		}
+		spec := expandIcmpTypeCodeSpec(input)[0]
+		if spec.Code != nil {
+			t.Fatalf("expected Code omitted, got *Code=%d", *spec.Code)
+		}
+	})
+
+	t.Run("is_all_allowed missing-from-map falls back to NOT wildcard", func(t *testing.T) {
+		// When Terraform omits is_all_allowed from the map entirely (rare but
+		// possible — e.g. provider acceptance tests that hand-build the map),
+		// the helper must NOT default to wildcard semantics. type/code must
+		// flow through as written so existing user expectations hold.
+		input := []interface{}{
+			map[string]interface{}{
+				"type": 11,
+				"code": 0,
+			},
+		}
+		spec := expandIcmpTypeCodeSpec(input)[0]
+		if spec.IsAllAllowed != nil {
+			t.Fatalf("expected IsAllAllowed nil when not in map, got %v", spec.IsAllAllowed)
+		}
+		if spec.Type == nil || *spec.Type != 11 {
+			t.Fatalf("expected Type=11 preserved, got %v", spec.Type)
+		}
+		if spec.Code == nil || *spec.Code != 0 {
+			t.Fatalf("expected Code=0 preserved, got %v", spec.Code)
+		}
+	})
+
+	t.Run("mixed wildcard and specific in one expansion", func(t *testing.T) {
+		// A more aggressive variant of the existing multi-block test:
+		// 3 entries covering wildcard / specific / second-wildcard-with-pollution.
+		input := []interface{}{
+			map[string]interface{}{"is_all_allowed": true, "type": 0, "code": 0},
+			map[string]interface{}{"is_all_allowed": false, "type": 3, "code": 1},
+			map[string]interface{}{"is_all_allowed": true, "type": 8, "code": 0}, // pollution attempt
+		}
+		got := expandIcmpTypeCodeSpec(input)
+		if len(got) != 3 {
+			t.Fatalf("expected 3 specs, got %d", len(got))
+		}
+		// entry 0 — clean wildcard
+		if got[0].Type != nil || got[0].Code != nil || got[0].IsAllAllowed == nil || !*got[0].IsAllAllowed {
+			t.Fatalf("entry 0 should be clean wildcard, got %+v", got[0])
+		}
+		// entry 1 — specific type 3 code 1
+		if got[1].Type == nil || *got[1].Type != 3 || got[1].Code == nil || *got[1].Code != 1 {
+			t.Fatalf("entry 1 should preserve type=3 code=1, got type=%v code=%v", got[1].Type, got[1].Code)
+		}
+		// entry 2 — wildcard with type=8 supplied must still be clean
+		if got[2].Type != nil || got[2].Code != nil {
+			t.Fatalf("entry 2 should be clean wildcard despite user-supplied type=8, got type=%v code=%v", got[2].Type, got[2].Code)
+		}
+	})
 }
