@@ -292,7 +292,7 @@ func ResourceNutanixCategoriesV2Delete(ctx context.Context, d *schema.ResourceDa
 	// differs across releases.
 	for _, ver := range []string{"v4.0.a1", "v4.2"} {
 		uri := "/api/prism/" + ver + "/config/categories/" + parentID
-		body, derr := callPrismRawStrict(conn, "DELETE", uri)
+		body, derr := callPrismRaw(conn, "DELETE", uri, false /* 404 → fall through */)
 		if derr == nil {
 			log.Printf("[INFO] empty parent category bucket %s deleted via %s", parentID, ver)
 			return nil
@@ -350,7 +350,7 @@ func discoverParentBucketExtID(conn *prismsdk.Client, key string) (string, error
 	q.Set("$filter", filter)
 	uri := "/api/prism/v4.0.a1/config/categories?" + q.Encode()
 
-	body, err := callPrismRaw(conn, "GET", uri)
+	body, err := callPrismRaw(conn, "GET", uri, false /* 404 on list = real error */)
 	if err != nil {
 		return "", fmt.Errorf("list categories (alpha): %w", err)
 	}
@@ -379,7 +379,7 @@ func isParentBucketEmpty(conn *prismsdk.Client, parentExtID string) (bool, error
 		return false, fmt.Errorf("empty parentExtID")
 	}
 	uri := "/api/prism/v4.0.a1/config/categories/" + parentExtID + "?$expand=childCategories"
-	body, err := callPrismRaw(conn, "GET", uri)
+	body, err := callPrismRaw(conn, "GET", uri, true /* 404 means already gone → treat as empty */)
 	if err != nil {
 		return true, nil
 	}
@@ -398,7 +398,13 @@ func isParentBucketEmpty(conn *prismsdk.Client, parentExtID string) (bool, error
 // parentExtId/childCategories), so we bypass it by talking directly to the
 // host with net/http while reusing Host/Port/Username/Password/VerifySSL
 // from the already-configured ApiClient.
-func callPrismRaw(conn *prismsdk.Client, method, uri string) ([]byte, error) {
+//
+// When acceptNotFound is true, HTTP 404 is reported as success (body, nil)
+// so the caller can decide whether "not found" is the success-path (e.g.
+// the parent bucket has already been removed during destroy). When false,
+// every 4xx/5xx is reported as an error so the caller can fall through to
+// a different API version.
+func callPrismRaw(conn *prismsdk.Client, method, uri string, acceptNotFound bool) ([]byte, error) {
 	if conn == nil || conn.CategoriesAPIInstance == nil || conn.CategoriesAPIInstance.ApiClient == nil {
 		return nil, fmt.Errorf("prism api client is nil")
 	}
@@ -411,59 +417,7 @@ func callPrismRaw(conn *prismsdk.Client, method, uri string) ([]byte, error) {
 		port = 9440
 	}
 	target := fmt.Sprintf("https://%s:%d%s", ac.Host, port, uri)
-	log.Printf("[DEBUG] callPrismRaw %s %s", method, target)
-
-	req, err := http.NewRequest(method, target, nil)
-	if err != nil {
-		return nil, fmt.Errorf("build request: %w", err)
-	}
-	req.SetBasicAuth(ac.Username, ac.Password)
-	req.Header.Set("Accept", "application/json")
-
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: !ac.VerifySSL},
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call %s %s: %w", method, target, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
-	}
-	log.Printf("[DEBUG] callPrismRaw response HTTP %d, body bytes=%d", resp.StatusCode, len(body))
-	if resp.StatusCode == http.StatusNotFound {
-		// Treat 404 as "nothing here" so the caller can decide whether
-		// that's the success-path (e.g. parent already gone in destroy).
-		return body, nil
-	}
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("HTTP %d from %s %s: %s", resp.StatusCode, method, target, string(body))
-	}
-	return body, nil
-}
-
-// callPrismRawStrict is like callPrismRaw but treats EVERY 4xx/5xx
-// (including 404) as an error. Used for the parent-delete fallback loop
-// where we need to know whether the call actually succeeded so we can
-// move on to the next API version.
-func callPrismRawStrict(conn *prismsdk.Client, method, uri string) ([]byte, error) {
-	if conn == nil || conn.CategoriesAPIInstance == nil || conn.CategoriesAPIInstance.ApiClient == nil {
-		return nil, fmt.Errorf("prism api client is nil")
-	}
-	ac := conn.CategoriesAPIInstance.ApiClient
-	if ac.Host == "" {
-		return nil, fmt.Errorf("prism api client host is empty")
-	}
-	port := ac.Port
-	if port == 0 {
-		port = 9440
-	}
-	target := fmt.Sprintf("https://%s:%d%s", ac.Host, port, uri)
-	log.Printf("[DEBUG] callPrismRawStrict %s %s", method, target)
+	log.Printf("[DEBUG] callPrismRaw %s %s (acceptNotFound=%v)", method, target, acceptNotFound)
 
 	req, err := http.NewRequest(method, target, nil)
 	if err != nil {
@@ -483,9 +437,12 @@ func callPrismRawStrict(conn *prismsdk.Client, method, uri string) ([]byte, erro
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	log.Printf("[DEBUG] callPrismRawStrict response HTTP %d, body bytes=%d", resp.StatusCode, len(body))
+	log.Printf("[DEBUG] callPrismRaw response HTTP %d, body bytes=%d", resp.StatusCode, len(body))
+	if resp.StatusCode == http.StatusNotFound && acceptNotFound {
+		return body, nil
+	}
 	if resp.StatusCode >= 400 {
-		return body, fmt.Errorf("HTTP %d", resp.StatusCode)
+		return body, fmt.Errorf("HTTP %d from %s %s: %s", resp.StatusCode, method, target, string(body))
 	}
 	return body, nil
 }
