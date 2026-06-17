@@ -26,7 +26,7 @@ terraform {
   required_providers {
     nutanix = {
       source  = "nutanix/nutanix"
-      version = "2.4.3-beta1-fc2"
+      version = "2.4.3-beta1-fc3"
     }
   }
 }
