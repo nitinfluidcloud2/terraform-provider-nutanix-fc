@@ -1,0 +1,9 @@
+.terraform
+.terraform.lock.hcl
+terraform.tfstate*
+*.tfvars
+.test*
+*.txt
+terraformrc
+*.sh
+.sourceme
