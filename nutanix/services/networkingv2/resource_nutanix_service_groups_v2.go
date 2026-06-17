@@ -382,14 +382,25 @@ func expandIcmpTypeCodeSpec(pr []interface{}) []import1.IcmpTypeCodeSpec {
 			icmp := import1.IcmpTypeCodeSpec{}
 			val := v.(map[string]interface{})
 
+			allAllowed := false
 			if allAllow, ok := val["is_all_allowed"]; ok {
-				icmp.IsAllAllowed = utils.BoolPtr(allAllow.(bool))
+				allAllowed = allAllow.(bool)
+				icmp.IsAllAllowed = utils.BoolPtr(allAllowed)
 			}
-			if code, ok := val["code"]; ok {
-				icmp.Code = utils.IntPtr(code.(int))
-			}
-			if types, ok := val["type"]; ok {
-				icmp.Type = utils.IntPtr(types.(int))
+			// When is_all_allowed is true the backend rejects payloads that
+			// also carry specific type/code values (MIC-30113 on policies,
+			// MIC-30302 on service groups). Terraform's schema-driven map
+			// fills absent int fields with 0, so the `if _, ok := val["code"]`
+			// guard below ALWAYS passes — without the allAllowed gate the
+			// provider would silently send {is_all_allowed:true, type:0, code:0}
+			// and every "ICMP ALL" emission would fail apply.
+			if !allAllowed {
+				if code, ok := val["code"]; ok {
+					icmp.Code = utils.IntPtr(code.(int))
+				}
+				if types, ok := val["type"]; ok {
+					icmp.Type = utils.IntPtr(types.(int))
+				}
 			}
 			icmps[k] = icmp
 		}
