@@ -11,7 +11,7 @@
 #
 set -euo pipefail
 
-VERSION="${VERSION:-2.4.3-beta1-fc3}"
+VERSION="${VERSION:-2.4.3-beta1-fc4}"
 PLATFORMS="${PLATFORMS:-darwin_arm64 darwin_amd64 linux_amd64 linux_arm64}"
 HOST="registry.terraform.io"          # mirror path host (NOT registry.opentofu.org)
 NS="nutanix"                          # namespace

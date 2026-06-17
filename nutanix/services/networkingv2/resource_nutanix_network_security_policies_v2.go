@@ -105,9 +105,18 @@ func ResourceNutanixNetworkSecurityPolicyV2() *schema.Resource {
 													Default:      "VM",
 													ValidateFunc: validation.StringInSlice([]string{"SUBNET", "VM", "VPC"}, false),
 												},
+												// Fork fix: was Required:true, which forced users to supply
+												// category_references even when they wanted to use
+												// secured_group_entity_group_reference. The v4.2 API treats
+												// the two as mutually exclusive (MIC-30142), so requiring
+												// both made entity_group_reference unusable. Match the
+												// API contract: at least one of category_references or
+												// entity_group_reference must be set; neither path is
+												// schema-required on its own. See upstream issue #1183.
 												"secured_group_category_references": {
 													Type:     schema.TypeList,
-													Required: true,
+													Optional: true,
+													Computed: true,
 													Elem: &schema.Schema{
 														Type: schema.TypeString,
 													},
